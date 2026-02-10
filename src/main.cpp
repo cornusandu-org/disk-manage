@@ -6,19 +6,25 @@
 #include <errno.h>
 #include <cstdio>
 #include <sys/resource.h>
+#include "format.hpp"
+#include "argmap.hpp"
+#include <string>
 
 #define INIT_FGET_BUF(x) x[strcspn(x, "\n")] = 0;
 
 using function_t = size_t(*)(const ArgMap* argv, size_t argc);
 
-constexpr struct {const char* name; function_t function;} functions[] = {
-    {"hi", NULL},
-};
+namespace terminal {
+    size_t cls(const ArgMap* argv, size_t argc) { system("clear"); return 0; }
+    size_t exit(const ArgMap* argv, size_t argc) { ::exit(0); __builtin_unreachable(); }
+}
 
-struct ArgMap {
-    char key[256];
-    char value[256];
-    unsigned char value_exists;
+constexpr struct {const char* name; function_t function;} functions[] = {
+    {"drives", &fs::get_drives},
+    {"volumes", &fs::get_volumes},
+    {"clear",  &terminal::cls},
+    {"exit",  &terminal::exit},
+    {NULL, NULL}
 };
 
 void raise_stack_limit(size_t bytes) {
@@ -33,7 +39,7 @@ void raise_stack_limit(size_t bytes) {
 }
 
 size_t get_args_size(const char* cmd) {
-    size_t size = 0;
+    size_t size = 1;
 
     for (const char* i = cmd; *i != 0; i++) {
         if (*i == ' ' || *i == '\n' || *i == '\0') {
@@ -62,17 +68,22 @@ size_t parse_args(const char* cmd, ArgMap* out_buffer) {
         }
         if (*i == ' ' || *i == '\n' || *i == '\0') {
             if (buffer_index > 0 || buffer_type == 1) {
-                if (buffer_type == 1)
-                    memcpy(tmp.value, buffer, 256);
-                else
-                    memcpy(tmp.key, buffer, 256);
+                if (buffer_type == 1) {
+                    memset(tmp.value, 0, 256);
+                    memcpy(tmp.value, buffer, buffer_index);
+                } else {
+                    memset(tmp.key, 0, 256);
+                    memcpy(tmp.key, buffer, buffer_index);
+                }
 
                 if (buffer_type == 0)
                     tmp.value_exists = 0;
                 else
                     tmp.value_exists = 1;
 
-                *(out_buffer+out_buffer_index) = tmp;
+                if (out_buffer != NULL)
+                    *(out_buffer+out_buffer_index) = tmp;
+                
                 out_buffer_index++;
                 buffer_index = 0;
                 buffer_type = 0;
@@ -99,6 +110,23 @@ size_t parse_args(const char* cmd, ArgMap* out_buffer) {
     return out_buffer_index;
 }
 
+static bool key_equals(const ArgMap& arg, const char* literal) {
+    size_t lit_len = strlen(literal);
+
+    // literal must fit
+    if (lit_len >= 256)
+        return false;
+
+    // bytes must match
+    if (memcmp(arg.key, literal, lit_len) != 0)
+        return false;
+
+    // ensure no extra characters in key
+    return arg.key[lit_len] == '\0';
+}
+
+
+
 int main() {
     raise_stack_limit(4 * 1024 * 1024); // 4 MB
 
@@ -111,14 +139,35 @@ int main() {
         fgets(input_buffer, sizeof input_buffer, stdin);
         INIT_FGET_BUF(input_buffer);
 
-        size_t arg_size = get_args_size(input_buffer);
+        size_t arg_size = parse_args(input_buffer, NULL);
         ArgMap* arguments = NULL;
         if (arg_size > 256) {  // Bounds check to avoid large alloca() calls
-            arguments = (ArgMap*)malloc(arg_size);
+            arguments = (ArgMap*)malloc(arg_size * sizeof(ArgMap));
         } else {
-            arguments = (ArgMap*)alloca(arg_size);
+            arguments = (ArgMap*)alloca(arg_size * sizeof(ArgMap));
+        }
+
+        size_t args_argc = parse_args(input_buffer, arguments);
+
+        printf("argc = %zu\n", args_argc);
+        for (size_t i = 0; i < args_argc; ++i) {
+            printf("arg[%zu] = '%s'\n", i, arguments[i].key);
         }
 
         // do something with the arguments now
+        char* command = arguments[0].key;
+
+        for (auto entry : functions) {
+            if (entry.name == NULL || entry.function == NULL) break;
+
+            if (key_equals(arguments[0], entry.name)) {
+                entry.function(arguments, args_argc);
+                goto goto_found;
+            }
+        }
+
+        printf("Invalid function.\n");
+
+        goto_found:
     }
 }

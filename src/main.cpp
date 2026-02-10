@@ -9,6 +9,12 @@
 
 #define INIT_FGET_BUF(x) x[strcspn(x, "\n")] = 0;
 
+using function_t = size_t(*)(const ArgMap* argv, size_t argc);
+
+constexpr struct {const char* name; function_t function;} functions[] = {
+    {"hi", NULL},
+};
+
 struct ArgMap {
     char key[256];
     char value[256];
